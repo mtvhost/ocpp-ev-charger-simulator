@@ -94,8 +94,7 @@ export class ChargerSimulator {
     });
 
     if (response.status === 'Accepted') {
-      // Force heartbeat to 30 seconds for testing keeping the connection active
-      const interval = 30;
+      const interval = (response.interval as number) || 60;
       this.startHeartbeat(interval);
 
       // Notify central system of connector statuses
