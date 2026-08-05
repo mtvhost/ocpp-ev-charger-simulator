@@ -37,26 +37,30 @@ async function main(): Promise<void> {
   });
 
   app.get('/connect', async (req, res) => {
-    await simulator.plugIn();
-    res.json({ message: 'Connector plugged in. Status updated to Preparing.', state: simulator.getStatus() });
+    const connectorId = parseInt(req.query.connectorId as string) || 1;
+    await simulator.plugIn(connectorId);
+    res.json({ message: `Connector ${connectorId} plugged in. Status updated to Preparing.`, state: simulator.getStatus() });
   });
 
   app.get('/disconnect', async (req, res) => {
-    await simulator.plugOut();
-    res.json({ message: 'Connector unplugged. Status updated to Available.', state: simulator.getStatus() });
+    const connectorId = parseInt(req.query.connectorId as string) || 1;
+    await simulator.plugOut(connectorId);
+    res.json({ message: `Connector ${connectorId} unplugged. Status updated to Available.`, state: simulator.getStatus() });
   });
 
   app.get('/start', async (req, res) => {
+    const connectorId = parseInt(req.query.connectorId as string) || 1;
     const limitQuery = req.query.limit;
     const limit = limitQuery ? parseFloat(limitQuery as string) : undefined;
     const tag = (req.query.idTag as string) || DEFAULT_ID_TAG;
-    await simulator.startCharging(tag, limit);
-    res.json({ message: 'StartTransaction sent.', state: simulator.getStatus() });
+    await simulator.startCharging(tag, connectorId, limit);
+    res.json({ message: `StartTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
 
   app.get('/stop', async (req, res) => {
-    await simulator.stopCharging();
-    res.json({ message: 'StopTransaction sent.', state: simulator.getStatus() });
+    const connectorId = parseInt(req.query.connectorId as string) || 1;
+    await simulator.stopCharging(connectorId);
+    res.json({ message: `StopTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
 
   app.listen(PORT, () => {

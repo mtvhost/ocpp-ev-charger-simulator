@@ -1,26 +1,40 @@
 import { OCPPClient } from './ocpp-client';
 
+interface ConnectorState {
+  status: string;
+  transactionId: number | null;
+  currentMeter: number;
+  meterValuesInterval: NodeJS.Timeout | null;
+}
+
 export class ChargerSimulator {
   private heartbeatInterval: NodeJS.Timeout | null = null;
-  private meterValuesInterval: NodeJS.Timeout | null = null;
-  private transactionId: number | null = null;
-  private currentMeter = 0; // in Wh
-
-  private connectorStatus = 'Available';
+  private connectors: Record<number, ConnectorState> = {
+    1: { status: 'Available', transactionId: null, currentMeter: 0, meterValuesInterval: null },
+    2: { status: 'Available', transactionId: null, currentMeter: 0, meterValuesInterval: null },
+  };
 
   constructor(private client: OCPPClient) {
     this.client.addCloseListener(() => {
       console.log('Clearing simulator intervals due to disconnect.');
       this.shutdown();
-      this.transactionId = null;
-      this.connectorStatus = 'Available';
+      for (const id of [1, 2]) {
+        this.connectors[id].transactionId = null;
+        this.connectors[id].status = 'Available';
+      }
     });
 
     this.client.onRequest('RemoteStartTransaction', async (payload) => {
       const idTag = payload.idTag as string;
-      if (this.connectorStatus === 'Preparing' && this.transactionId === null) {
-        console.log(`Received RemoteStartTransaction with idTag: ${idTag}. Accepting.`);
-        
+      const connectorId = payload.connectorId as number | undefined;
+      // Default to 1 if not provided or 0
+      const targetConnector = connectorId && connectorId > 0 ? connectorId : 1;
+
+      const connector = this.connectors[targetConnector];
+
+      if (connector && connector.status === 'Preparing' && connector.transactionId === null) {
+        console.log(`Received RemoteStartTransaction for connector ${targetConnector} with idTag: ${idTag}. Accepting.`);
+
         let limitKwh: number | undefined;
         if (typeof payload.limit === 'number') {
           limitKwh = payload.limit;
@@ -35,41 +49,47 @@ export class ChargerSimulator {
           }
         }
 
-        setTimeout(() => this.startCharging(idTag, limitKwh), 500);
+        setTimeout(() => this.startCharging(idTag, targetConnector, limitKwh), 500);
         return { status: 'Accepted' };
       }
-      console.log(`Received RemoteStartTransaction but status is ${this.connectorStatus}. Rejecting.`);
+      console.log(`Received RemoteStartTransaction for connector ${targetConnector} but status is ${connector?.status}. Rejecting.`);
       return { status: 'Rejected' };
     });
 
     this.client.onRequest('RemoteStopTransaction', async (payload) => {
       const txId = payload.transactionId as number;
-      if (this.transactionId === txId) {
-        console.log(`Received RemoteStopTransaction for txId: ${txId}. Accepting.`);
-        setTimeout(() => this.stopCharging(), 500);
-        return { status: 'Accepted' };
+      for (const id of [1, 2]) {
+        if (this.connectors[id].transactionId === txId) {
+          console.log(`Received RemoteStopTransaction for txId: ${txId} (Connector ${id}). Accepting.`);
+          setTimeout(() => this.stopCharging(id), 500);
+          return { status: 'Accepted' };
+        }
       }
-      console.log(`Received RemoteStopTransaction but txId ${txId} does not match active tx ${this.transactionId}. Rejecting.`);
+      console.log(`Received RemoteStopTransaction for txId ${txId} but no active transaction found. Rejecting.`);
       return { status: 'Rejected' };
     });
   }
 
-  public async plugIn(): Promise<void> {
-    if (this.connectorStatus !== 'Available') {
-      console.log(`Cannot connect/plug in. Connector is currently ${this.connectorStatus}`);
+  public async plugIn(connectorId: number = 1): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    if (connector.status !== 'Available') {
+      console.log(`Cannot connect/plug in connector ${connectorId}. Status is ${connector.status}`);
       return;
     }
-    this.connectorStatus = 'Preparing';
-    await this.sendStatusNotification(1, 'Preparing');
+    connector.status = 'Preparing';
+    await this.sendStatusNotification(connectorId, 'Preparing');
   }
 
-  public async plugOut(): Promise<void> {
-    if (this.connectorStatus !== 'Preparing' && this.connectorStatus !== 'Finishing') {
-      console.log(`Cannot disconnect/unplug. Connector is currently ${this.connectorStatus}`);
+  public async plugOut(connectorId: number = 1): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    if (connector.status !== 'Preparing' && connector.status !== 'Finishing') {
+      console.log(`Cannot disconnect/unplug connector ${connectorId}. Status is ${connector.status}`);
       return;
     }
-    this.connectorStatus = 'Available';
-    await this.sendStatusNotification(1, 'Available');
+    connector.status = 'Available';
+    await this.sendStatusNotification(connectorId, 'Available');
   }
 
   public async sendStatusNotification(connectorId: number, status: string): Promise<void> {
@@ -99,59 +119,64 @@ export class ChargerSimulator {
 
       // Notify central system of connector statuses
       await this.sendStatusNotification(0, 'Available');
-      await this.sendStatusNotification(1, 'Available');
+      await this.sendStatusNotification(1, this.connectors[1].status);
+      await this.sendStatusNotification(2, this.connectors[2].status);
     }
   }
 
-  public async startCharging(idTag: string, limitKwh?: number): Promise<void> {
-    if (this.transactionId !== null) {
-      console.log('Transaction already in progress');
+  public async startCharging(idTag: string, connectorId: number = 1, limitKwh?: number): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    if (connector.transactionId !== null) {
+      console.log(`Transaction already in progress on connector ${connectorId}`);
       return;
     }
 
-    this.connectorStatus = 'Preparing';
-    await this.sendStatusNotification(1, 'Preparing');
+    connector.status = 'Preparing';
+    await this.sendStatusNotification(connectorId, 'Preparing');
 
-    console.log('Starting Transaction...');
+    console.log(`Starting Transaction on connector ${connectorId}...`);
     const txResponse = await this.client.send('StartTransaction', {
-      connectorId: 1,
+      connectorId,
       idTag,
-      meterStart: this.currentMeter,
+      meterStart: connector.currentMeter,
       timestamp: new Date().toISOString(),
     });
-    console.log('StartTransaction Response:', txResponse);
+    console.log(`StartTransaction Response (Connector ${connectorId}):`, txResponse);
 
     const txId = txResponse.transactionId;
     if (typeof txId === 'number') {
-      this.transactionId = txId;
-      this.connectorStatus = 'Charging';
-      await this.sendStatusNotification(1, 'Charging');
-      this.startMeterValues(limitKwh);
+      connector.transactionId = txId;
+      connector.status = 'Charging';
+      await this.sendStatusNotification(connectorId, 'Charging');
+      this.startMeterValues(connectorId, limitKwh);
     } else {
-      this.connectorStatus = 'Available';
-      await this.sendStatusNotification(1, 'Available');
+      connector.status = 'Available';
+      await this.sendStatusNotification(connectorId, 'Available');
     }
   }
 
-  public async stopCharging(): Promise<void> {
-    if (this.transactionId === null) {
-      console.log('No active transaction');
+  public async stopCharging(connectorId: number = 1): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    if (connector.transactionId === null) {
+      console.log(`No active transaction on connector ${connectorId}`);
       return;
     }
 
-    console.log('Stopping Transaction...');
-    this.stopMeterValues();
-    this.connectorStatus = 'Finishing';
-    await this.sendStatusNotification(1, 'Finishing');
+    console.log(`Stopping Transaction on connector ${connectorId}...`);
+    this.stopMeterValues(connectorId);
+    connector.status = 'Finishing';
+    await this.sendStatusNotification(connectorId, 'Finishing');
 
     const response = await this.client.send('StopTransaction', {
-      transactionId: this.transactionId,
-      meterStop: this.currentMeter,
+      transactionId: connector.transactionId,
+      meterStop: connector.currentMeter,
       timestamp: new Date().toISOString(),
       reason: 'Local',
     });
-    console.log('StopTransaction Response:', response);
-    this.transactionId = null;
+    console.log(`StopTransaction Response (Connector ${connectorId}):`, response);
+    connector.transactionId = null;
   }
 
   private startHeartbeat(intervalSeconds: number): void {
@@ -172,8 +197,10 @@ export class ChargerSimulator {
     this.heartbeatInterval = setInterval(sendHeartbeat, intervalSeconds * 1000);
   }
 
-  private startMeterValues(limitKwh?: number): void {
-    if (this.meterValuesInterval) clearInterval(this.meterValuesInterval);
+  private startMeterValues(connectorId: number, limitKwh?: number): void {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    if (connector.meterValuesInterval) clearInterval(connector.meterValuesInterval);
 
     const pulseValueWh = 500; // 0.5 kWh per pulse
     let intervalMs = 10000; // Default 10s interval
@@ -181,30 +208,30 @@ export class ChargerSimulator {
 
     if (limitKwh && limitKwh > 0) {
       const totalWhToCharge = limitKwh * 1000;
-      targetMeterValue = this.currentMeter + totalWhToCharge;
-      
+      targetMeterValue = connector.currentMeter + totalWhToCharge;
+
       const totalPulses = totalWhToCharge / pulseValueWh;
       const totalDurationMs = 180 * 1000; // 3 minutes
-      
+
       intervalMs = totalDurationMs / totalPulses;
-      console.log(`Charging with limit: ${limitKwh} kWh. Total pulses: ${totalPulses}. Interval between pulses: ${(intervalMs / 1000).toFixed(2)}s`);
+      console.log(`Connector ${connectorId} Charging with limit: ${limitKwh} kWh. Total pulses: ${totalPulses}. Interval: ${(intervalMs / 1000).toFixed(2)}s`);
     } else {
-      console.log(`Charging without limit. Interval between pulses: 10s`);
+      console.log(`Connector ${connectorId} Charging without limit. Interval: 10s`);
     }
 
-    this.meterValuesInterval = setInterval(async () => {
-      this.currentMeter += pulseValueWh;
-      console.log(`Sending MeterValues: ${this.currentMeter / 1000} kWh (Added 0.5 kWh)...`);
+    connector.meterValuesInterval = setInterval(async () => {
+      connector.currentMeter += pulseValueWh;
+      console.log(`Sending MeterValues for Connector ${connectorId}: ${connector.currentMeter / 1000} kWh (Added 0.5 kWh)...`);
       try {
         await this.client.send('MeterValues', {
-          connectorId: 1,
-          transactionId: this.transactionId,
+          connectorId,
+          transactionId: connector.transactionId,
           meterValue: [
             {
               timestamp: new Date().toISOString(),
               sampledValue: [
                 {
-                  value: this.currentMeter.toString(),
+                  value: connector.currentMeter.toString(),
                   context: 'Sample.Periodic',
                   measurand: 'Energy.Active.Import.Register',
                   unit: 'Wh',
@@ -214,33 +241,44 @@ export class ChargerSimulator {
           ],
         });
 
-        if (targetMeterValue !== null && this.currentMeter >= targetMeterValue) {
-          console.log('Target kWh limit reached. Autostopping transaction...');
-          await this.stopCharging();
+        if (targetMeterValue !== null && connector.currentMeter >= targetMeterValue) {
+          console.log(`Target kWh limit reached for Connector ${connectorId}. Autostopping transaction...`);
+          await this.stopCharging(connectorId);
         }
       } catch (err) {
-        console.error('Failed to send meter values:', err);
+        console.error(`Failed to send meter values for Connector ${connectorId}:`, err);
       }
     }, intervalMs);
   }
 
-  private stopMeterValues(): void {
-    if (this.meterValuesInterval) {
-      clearInterval(this.meterValuesInterval);
-      this.meterValuesInterval = null;
+  private stopMeterValues(connectorId: number): void {
+    const connector = this.connectors[connectorId];
+    if (connector && connector.meterValuesInterval) {
+      clearInterval(connector.meterValuesInterval);
+      connector.meterValuesInterval = null;
     }
   }
 
   public getStatus() {
     return {
-      connectorStatus: this.connectorStatus,
-      transactionId: this.transactionId,
-      currentMeterWh: this.currentMeter,
+      connectors: {
+        1: {
+          connectorStatus: this.connectors[1].status,
+          transactionId: this.connectors[1].transactionId,
+          currentMeterWh: this.connectors[1].currentMeter,
+        },
+        2: {
+          connectorStatus: this.connectors[2].status,
+          transactionId: this.connectors[2].transactionId,
+          currentMeterWh: this.connectors[2].currentMeter,
+        }
+      }
     };
   }
 
   public shutdown(): void {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-    this.stopMeterValues();
+    this.stopMeterValues(1);
+    this.stopMeterValues(2);
   }
 }
