@@ -36,20 +36,20 @@ async function main(): Promise<void> {
     res.json(simulator.getStatus());
   });
 
-  app.get('/connect', async (req, res) => {
-    const connectorId = parseInt(req.query.connectorId as string) || 1;
+  app.get('/connect/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string) || 1;
     await simulator.plugIn(connectorId);
     res.json({ message: `Connector ${connectorId} plugged in. Status updated to Preparing.`, state: simulator.getStatus() });
   });
 
-  app.get('/disconnect', async (req, res) => {
-    const connectorId = parseInt(req.query.connectorId as string) || 1;
+  app.get('/disconnect/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string) || 1;
     await simulator.plugOut(connectorId);
     res.json({ message: `Connector ${connectorId} unplugged. Status updated to Available.`, state: simulator.getStatus() });
   });
 
-  app.get('/start', async (req, res) => {
-    const connectorId = parseInt(req.query.connectorId as string) || 1;
+  app.get('/start/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string) || 1;
     const limitQuery = req.query.limit;
     const limit = limitQuery ? parseFloat(limitQuery as string) : undefined;
     const tag = (req.query.idTag as string) || DEFAULT_ID_TAG;
@@ -57,8 +57,8 @@ async function main(): Promise<void> {
     res.json({ message: `StartTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
 
-  app.get('/stop', async (req, res) => {
-    const connectorId = parseInt(req.query.connectorId as string) || 1;
+  app.get('/stop/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string) || 1;
     await simulator.stopCharging(connectorId);
     res.json({ message: `StopTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
