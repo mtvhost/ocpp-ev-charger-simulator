@@ -4,14 +4,15 @@ interface ConnectorState {
   status: string;
   transactionId: number | null;
   currentMeter: number;
+  currentSoC: number;
   meterValuesInterval: NodeJS.Timeout | null;
 }
 
 export class ChargerSimulator {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private connectors: Record<number, ConnectorState> = {
-    1: { status: 'Available', transactionId: null, currentMeter: 0, meterValuesInterval: null },
-    2: { status: 'Available', transactionId: null, currentMeter: 0, meterValuesInterval: null },
+    1: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null },
+    2: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null },
   };
 
   constructor(private client: OCPPClient) {
@@ -21,6 +22,7 @@ export class ChargerSimulator {
       for (const id of [1, 2]) {
         this.connectors[id].transactionId = null;
         this.connectors[id].status = 'Available';
+        this.connectors[id].currentSoC = 20;
       }
     });
 
@@ -133,6 +135,7 @@ export class ChargerSimulator {
     }
 
     connector.status = 'Preparing';
+    connector.currentSoC = 20; // reset SoC when starting a new charge
     await this.sendStatusNotification(connectorId, 'Preparing');
 
     console.log(`Starting Transaction on connector ${connectorId}...`);
@@ -202,26 +205,35 @@ export class ChargerSimulator {
     if (!connector) return;
     if (connector.meterValuesInterval) clearInterval(connector.meterValuesInterval);
 
-    const pulseValueWh = 500; // 0.5 kWh per pulse
-    let intervalMs = 10000; // Default 10s interval
+    const TIME_ACCELERATION = 30; // 30x faster than real life
+    let intervalMs = 10000; // 10s interval
     let targetMeterValue: number | null = null;
 
     if (limitKwh && limitKwh > 0) {
-      const totalWhToCharge = limitKwh * 1000;
-      targetMeterValue = connector.currentMeter + totalWhToCharge;
-
-      const totalPulses = totalWhToCharge / pulseValueWh;
-      const totalDurationMs = 180 * 1000; // 3 minutes
-
-      intervalMs = totalDurationMs / totalPulses;
-      console.log(`Connector ${connectorId} Charging with limit: ${limitKwh} kWh. Total pulses: ${totalPulses}. Interval: ${(intervalMs / 1000).toFixed(2)}s`);
+      targetMeterValue = connector.currentMeter + (limitKwh * 1000);
+      console.log(`Connector ${connectorId} Charging with limit: ${limitKwh} kWh.`);
     } else {
-      console.log(`Connector ${connectorId} Charging without limit. Interval: 10s`);
+      console.log(`Connector ${connectorId} Charging without limit.`);
     }
 
     connector.meterValuesInterval = setInterval(async () => {
+      let activeCount = 0;
+      if (this.connectors[1].status === 'Charging' || this.connectors[1].status === 'Finishing') activeCount++;
+      if (this.connectors[2].status === 'Charging' || this.connectors[2].status === 'Finishing') activeCount++;
+      if (activeCount === 0) activeCount = 1;
+
+      const powerW = 60000 / activeCount;
+      const currentA = (powerW / 220).toFixed(2);
+
+      // Energy added in this interval (Wh), accelerated
+      const pulseValueWh = powerW * (intervalMs / 3600000) * TIME_ACCELERATION;
+
       connector.currentMeter += pulseValueWh;
-      console.log(`Sending MeterValues for Connector ${connectorId}: ${connector.currentMeter / 1000} kWh (Added 0.5 kWh)...`);
+
+      // Total battery = 34000 Wh. SoC increase based on added energy.
+      connector.currentSoC += (pulseValueWh / 34000) * 100;
+
+      console.log(`Connector ${connectorId}: Active Connectors: ${activeCount}, Power: ${powerW}W, Added: ${(pulseValueWh / 1000).toFixed(3)}kWh, SoC: ${connector.currentSoC.toFixed(2)}%`);
       try {
         await this.client.send('MeterValues', {
           connectorId,
@@ -231,11 +243,35 @@ export class ChargerSimulator {
               timestamp: new Date().toISOString(),
               sampledValue: [
                 {
-                  value: connector.currentMeter.toString(),
+                  value: Math.round(connector.currentMeter).toString(),
                   context: 'Sample.Periodic',
                   measurand: 'Energy.Active.Import.Register',
                   unit: 'Wh',
                 },
+                {
+                  value: Math.min(Math.round(connector.currentSoC), 100).toString(),
+                  context: 'Sample.Periodic',
+                  measurand: 'SoC',
+                  unit: 'Percent',
+                },
+                {
+                  value: '220',
+                  context: 'Sample.Periodic',
+                  measurand: 'Voltage',
+                  unit: 'V',
+                },
+                {
+                  value: currentA.toString(),
+                  context: 'Sample.Periodic',
+                  measurand: 'Current.Import',
+                  unit: 'A',
+                },
+                {
+                  value: Math.round(powerW).toString(),
+                  context: 'Sample.Periodic',
+                  measurand: 'Power.Active.Import',
+                  unit: 'W',
+                }
               ],
             },
           ],
@@ -243,6 +279,9 @@ export class ChargerSimulator {
 
         if (targetMeterValue !== null && connector.currentMeter >= targetMeterValue) {
           console.log(`Target kWh limit reached for Connector ${connectorId}. Autostopping transaction...`);
+          await this.stopCharging(connectorId);
+        } else if (connector.currentSoC >= 100) {
+          console.log(`Target SoC 100% reached for Connector ${connectorId}. Autostopping transaction...`);
           await this.stopCharging(connectorId);
         }
       } catch (err) {
@@ -266,11 +305,13 @@ export class ChargerSimulator {
           connectorStatus: this.connectors[1].status,
           transactionId: this.connectors[1].transactionId,
           currentMeterWh: this.connectors[1].currentMeter,
+          currentSoC: this.connectors[1].currentSoC,
         },
         2: {
           connectorStatus: this.connectors[2].status,
           transactionId: this.connectors[2].transactionId,
           currentMeterWh: this.connectors[2].currentMeter,
+          currentSoC: this.connectors[2].currentSoC,
         }
       }
     };
