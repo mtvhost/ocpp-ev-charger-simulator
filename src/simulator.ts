@@ -152,6 +152,31 @@ export class ChargerSimulator {
       connector.transactionId = txId;
       connector.status = 'Charging';
       await this.sendStatusNotification(connectorId, 'Charging');
+
+      // OCPP 1.6: Transaction.Begin MeterValues — initial readings at transaction start
+      await this.client.send('MeterValues', {
+        connectorId,
+        transactionId: txId,
+        meterValue: [{
+          timestamp: new Date().toISOString(),
+          sampledValue: [
+            {
+              value: Math.round(connector.currentMeter).toString(),
+              context: 'Transaction.Begin',
+              measurand: 'Energy.Active.Import.Register',
+              unit: 'Wh',
+            },
+            {
+              value: connector.currentSoC.toString(),
+              context: 'Transaction.Begin',
+              measurand: 'SoC',
+              location: 'EV',
+              unit: 'Percent',
+            },
+          ],
+        }],
+      });
+
       this.startMeterValues(connectorId, limitKwh);
     } else {
       connector.status = 'Available';
@@ -172,11 +197,49 @@ export class ChargerSimulator {
     connector.status = 'Finishing';
     await this.sendStatusNotification(connectorId, 'Finishing');
 
+    const finalSoC = Math.min(Math.round(connector.currentSoC), 100);
     const response = await this.client.send('StopTransaction', {
       transactionId: connector.transactionId,
       meterStop: connector.currentMeter,
       timestamp: new Date().toISOString(),
       reason: 'Local',
+      // OCPP 1.6: transactionData with Transaction.End readings
+      transactionData: [{
+        timestamp: new Date().toISOString(),
+        sampledValue: [
+          {
+            value: Math.round(connector.currentMeter).toString(),
+            context: 'Transaction.End',
+            measurand: 'Energy.Active.Import.Register',
+            unit: 'Wh',
+          },
+          {
+            value: finalSoC.toString(),
+            context: 'Transaction.End',
+            measurand: 'SoC',
+            location: 'EV',
+            unit: 'Percent',
+          },
+          {
+            value: '220',
+            context: 'Transaction.End',
+            measurand: 'Voltage',
+            unit: 'V',
+          },
+          {
+            value: '0',
+            context: 'Transaction.End',
+            measurand: 'Current.Import',
+            unit: 'A',
+          },
+          {
+            value: '0',
+            context: 'Transaction.End',
+            measurand: 'Power.Active.Import',
+            unit: 'W',
+          },
+        ],
+      }],
     });
     console.log(`StopTransaction Response (Connector ${connectorId}):`, response);
     connector.transactionId = null;
@@ -252,6 +315,7 @@ export class ChargerSimulator {
                   value: Math.min(Math.round(connector.currentSoC), 100).toString(),
                   context: 'Sample.Periodic',
                   measurand: 'SoC',
+                  location: 'EV',
                   unit: 'Percent',
                 },
                 {
