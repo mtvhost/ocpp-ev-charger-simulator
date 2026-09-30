@@ -6,13 +6,21 @@ interface ConnectorState {
   currentMeter: number;
   currentSoC: number;
   meterValuesInterval: NodeJS.Timeout | null;
+  lastIdTag: string | null;
+  lastStartStatus: string | null;
 }
+
+// Real chargers stop on their own when StartTransaction answers anything but
+// Accepted (StopTransactionOnInvalidId=true). IGNORE_INVALID=true simulates one
+// that keeps charging, to exercise the central system's RemoteStop fallback.
+const IGNORE_INVALID = process.env.IGNORE_INVALID === 'true';
 
 export class ChargerSimulator {
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private lastRemoteStartIdTag: string | null = null;
   private connectors: Record<number, ConnectorState> = {
-    1: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null },
-    2: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null },
+    1: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null },
+    2: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null },
   };
 
   constructor(private client: OCPPClient) {
@@ -28,6 +36,7 @@ export class ChargerSimulator {
 
     this.client.onRequest('RemoteStartTransaction', async (payload) => {
       const idTag = payload.idTag as string;
+      this.lastRemoteStartIdTag = idTag;
       const connectorId = payload.connectorId as number | undefined;
       // Default to 1 if not provided or 0
       const targetConnector = connectorId && connectorId > 0 ? connectorId : 1;
@@ -148,6 +157,23 @@ export class ChargerSimulator {
     console.log(`StartTransaction Response (Connector ${connectorId}):`, txResponse);
 
     const txId = txResponse.transactionId;
+    const idTagStatus = ((txResponse.idTagInfo as Record<string, unknown> | undefined)?.status as string) ?? 'Accepted';
+    connector.lastIdTag = idTag;
+    connector.lastStartStatus = idTagStatus;
+
+    if (typeof txId === 'number' && idTagStatus !== 'Accepted' && !IGNORE_INVALID) {
+      console.log(`idTag ${idTag} is ${idTagStatus} on connector ${connectorId}: stopping (DeAuthorized).`);
+      await this.client.send('StopTransaction', {
+        transactionId: txId,
+        meterStop: Math.round(connector.currentMeter),
+        timestamp: new Date().toISOString(),
+        reason: 'DeAuthorized',
+      });
+      connector.status = 'Available';
+      await this.sendStatusNotification(connectorId, 'Available');
+      return;
+    }
+
     if (typeof txId === 'number') {
       connector.transactionId = txId;
       connector.status = 'Charging';
@@ -362,22 +388,25 @@ export class ChargerSimulator {
     }
   }
 
+  public async authorize(idTag: string): Promise<Record<string, unknown>> {
+    const response = await this.client.send('Authorize', { idTag });
+    console.log(`Authorize Response (${idTag}):`, response);
+    return response;
+  }
+
   public getStatus() {
+    const view = (id: number) => ({
+      connectorStatus: this.connectors[id].status,
+      transactionId: this.connectors[id].transactionId,
+      currentMeterWh: this.connectors[id].currentMeter,
+      currentSoC: this.connectors[id].currentSoC,
+      lastIdTag: this.connectors[id].lastIdTag,
+      lastStartStatus: this.connectors[id].lastStartStatus,
+    });
     return {
-      connectors: {
-        1: {
-          connectorStatus: this.connectors[1].status,
-          transactionId: this.connectors[1].transactionId,
-          currentMeterWh: this.connectors[1].currentMeter,
-          currentSoC: this.connectors[1].currentSoC,
-        },
-        2: {
-          connectorStatus: this.connectors[2].status,
-          transactionId: this.connectors[2].transactionId,
-          currentMeterWh: this.connectors[2].currentMeter,
-          currentSoC: this.connectors[2].currentSoC,
-        }
-      }
+      lastRemoteStartIdTag: this.lastRemoteStartIdTag,
+      ignoreInvalid: IGNORE_INVALID,
+      connectors: { 1: view(1), 2: view(2) },
     };
   }
 
