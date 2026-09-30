@@ -57,6 +57,16 @@ async function main(): Promise<void> {
     res.json({ message: `StartTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
 
+  app.get('/authorize', async (req, res) => {
+    const tag = (req.query.idTag as string) || DEFAULT_ID_TAG;
+    try {
+      const response = await simulator.authorize(tag);
+      res.json({ message: `Authorize sent for idTag ${tag}.`, response });
+    } catch (err) {
+      res.status(502).json({ message: `Authorize failed: ${(err as Error).message}` });
+    }
+  });
+
   app.get('/stop/:connectorId?', async (req, res) => {
     const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
     await simulator.stopCharging(connectorId);

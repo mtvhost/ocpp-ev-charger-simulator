@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "scenarios:e02": "npm run build && node dist/scenarios/e02.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
