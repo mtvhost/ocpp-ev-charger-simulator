@@ -9,7 +9,8 @@
     "scenarios:e02": "npm run build && node dist/scenarios/e02.js",
     "scenarios:e07": "npm run build && node dist/scenarios/e07.js",
     "scenarios:e06": "npm run build && node dist/scenarios/e06.js",
-    "scenarios:e08": "npm run build && node dist/scenarios/e08.js"
+    "scenarios:e08": "npm run build && node dist/scenarios/e08.js",
+    "scenarios:e09": "npm run build && node dist/scenarios/e09.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

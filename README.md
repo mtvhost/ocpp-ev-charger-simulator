@@ -201,3 +201,9 @@ CONNECTOR=1
 ```
 
 O backend precisa de `PUBLIC_API_URL` acessível pelo simulador (o `location` do GetDiagnostics é montado com ela). Para o caso de timeout não demorar 30 s no POST, use `OCPP_OPERATION_SYNC_WAIT_MS=5000` no backend local.
+
+## Tarifação v2 (E09)
+
+`npm run scenarios:e09` roda contra o backend e o gateway **locais**, com o tenant do carregador em `tariffV2Enabled`. Ele grava no carregador uma tarifa com faixa de ponta e taxa de ociosidade, confere o simulador de preço (`30 kWh, 50 min, 15 min ocioso → R$ 105,00`) e faz uma recarga local (RFID, `allowLocalStart`). No meio da sessão muda a tarifa, para provar que o preço continua congelado, e deixa o conector em `SuspendedEV` por `IDLE_WAIT_MS` (padrão 75 s). Depois encerra e confere os itens do preço: energia na faixa, minutos de ociosidade e total igual à soma. No fim devolve a tarifa original do carregador.
+
+Variáveis: `API_TOKEN` (com `CHARGERS_UPDATE`, `CHARGERS_VIEW`, `TRANSACTIONS_VIEW` e `TARIFFS_MANAGE`), `CHARGER_DB_ID`, `CONNECTOR`, `METER_WAIT_MS`, `IDLE_WAIT_MS`.
