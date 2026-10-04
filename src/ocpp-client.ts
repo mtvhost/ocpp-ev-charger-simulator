@@ -163,7 +163,11 @@ export class OCPPClient {
             console.log(`\x1b[32mSending Response:\x1b[0m ${message}`);
             this.ws?.send(message);
           } catch (err) {
-            const message = JSON.stringify([4, messageId, "InternalError", "Handler crashed", {}]);
+            // E08: o handler pode escolher o CALLERROR (ex.: NotImplemented forçado por /behavior).
+            const code = (err as { ocppErrorCode?: string }).ocppErrorCode ?? "InternalError";
+            const description = code === "InternalError" ? "Handler crashed" : (err as Error).message;
+            const message = JSON.stringify([4, messageId, code, description, {}]);
+            console.log(`[31mSending CallError:[0m ${message}`);
             this.ws?.send(message);
           }
         } else {
