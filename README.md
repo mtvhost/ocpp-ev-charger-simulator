@@ -85,3 +85,63 @@ CHARGER_DB_ID=<_id do carregador>
 TENANT_ID=<tenant do carregador>
 CONNECTOR=1
 ```
+
+## Autenticação OCPP (E06, Security Profile 1)
+
+Com `CHARGER_PASSWORD` definida, o simulador conecta com `Authorization: Basic base64(CHARGER_ID:senha)`, o mesmo formato de um carregador real configurado com `AuthorizationKey`. Sem ela, conecta como carregador legado. O subprotocolo `ocpp1.6` é sempre oferecido, exceto em `/ws/connect?protocol=none`.
+
+```env
+CHARGER_PASSWORD=<senha gerada na aba Segurança do carregador>
+```
+
+### Endpoints de conexão
+
+- **`GET /ws/connect`**: fecha a conexão atual e conecta de novo. Parâmetros:
+  - `password=…` troca a senha; `noAuth=1` conecta sem senha;
+  - `url=ws://…` conecta em outro gateway (por exemplo, a segunda instância);
+  - `protocol=none` não oferece `ocpp1.6`;
+  - `auto=0|1` liga ou desliga a reconexão automática. Por padrão, uma recusa (401/400/429) não entra em loop.
+- **`GET /ws/disconnect`**: fecha a conexão e desliga a reconexão automática.
+- **`GET /reboot`**: simula um reboot. Fecha a conexão, reconecta com a senha atual e manda `BootNotification`.
+- **`GET /status`** agora traz `connection`:
+  - `connected`;
+  - `lastHandshakeStatus`: 101 se conectou, ou o status HTTP da recusa (401, 400, 429, 503);
+  - `lastCloseCode`: 4000 quando outra conexão autenticada substituiu esta;
+  - `protocol` e `url`.
+
+Correções do E06:
+
+- Um handshake recusado agendava duas retentativas (`error` e `close`), e o número de tentativas crescia a cada rodada. Agora há uma retentativa por vez.
+- O servidor HTTP sobe antes da primeira conexão, então o simulador continua controlável quando o gateway recusa.
+- Chamadas sem resposta falham em 30 s.
+
+### Cenários automatizados
+
+`npm run scenarios:e06` roda contra o backend local e **duas instâncias** do gateway (Mongo e Redis locais, nunca o `.env` de produção do backend):
+
+1. sem credencial → 401, e o backend registra a recusa (`lastRejectedAt`);
+2. senha errada → 401;
+3. senha certa → conecta com `ocpp1.6`, e o backend registra `auth=basic`;
+4. `requireAuth` sem subprotocolo → 400;
+5. rotação com sessão ativa (remote start): a conexão e a transação seguem até o stop; na reconexão, a senha antiga é recusada e a nova aceita;
+6. reboot → reconecta e o carregador volta a ficar online;
+7. duas instâncias:
+   - uma cópia **sem senha** na instância B não derruba o simulador na A;
+   - uma cópia **autenticada** na B faz a A fechar o socket com 4000;
+   - aparece `CONNECTION_REPLACED` no histórico, e o carregador continua online;
+8. legado (`requireAuth=false`) conecta sem senha e é registrado como `auth=none`;
+9. (opcional, `RATE_LIMIT_ATTEMPTS`) falhas seguidas → 429, inclusive na outra instância.
+
+O cenário gera e rotaciona a senha do carregador. No fim, devolve `requireAuth` ao valor original e imprime a senha final.
+
+```env
+SIM_URL=http://localhost:8080
+API_URL=http://localhost:3030/v1
+API_TOKEN=<JWT com CHARGERS_SECURITY, CHARGERS_VIEW e TRANSACTIONS_SKIP_PAYMENT>
+CHARGER_DB_ID=<_id do carregador>
+CHARGER_ID=<identity do carregador>
+TENANT_ID=<tenant do carregador>
+GATEWAY_A=ws://localhost:8081
+GATEWAY_B=ws://localhost:8082
+# RATE_LIMIT_ATTEMPTS=5   # use o mesmo valor de OCPP_AUTH_MAX_FAILS_PER_IP dos gateways, com OCPP_AUTH_BLOCK_S curto
+```
