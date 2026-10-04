@@ -67,6 +67,24 @@ async function main(): Promise<void> {
     }
   });
 
+  app.get('/suspend/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
+    const ok = await simulator.suspend(connectorId);
+    res.status(ok ? 200 : 409).json({
+      message: ok ? `Connector ${connectorId} suspended by the EV (SuspendedEV, 0 W).` : `Connector ${connectorId} is not charging.`,
+      state: simulator.getStatus(),
+    });
+  });
+
+  app.get('/resume/:connectorId?', async (req, res) => {
+    const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
+    const ok = await simulator.resume(connectorId);
+    res.status(ok ? 200 : 409).json({
+      message: ok ? `Connector ${connectorId} charging again.` : `Connector ${connectorId} is not suspended.`,
+      state: simulator.getStatus(),
+    });
+  });
+
   app.get('/stop/:connectorId?', async (req, res) => {
     const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
     await simulator.stopCharging(connectorId);

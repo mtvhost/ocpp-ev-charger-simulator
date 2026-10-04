@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "scenarios:e02": "npm run build && node dist/scenarios/e02.js"
+    "scenarios:e02": "npm run build && node dist/scenarios/e02.js",
+    "scenarios:e07": "npm run build && node dist/scenarios/e07.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
