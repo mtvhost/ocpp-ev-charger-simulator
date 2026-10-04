@@ -8,6 +8,7 @@ interface ConnectorState {
   meterValuesInterval: NodeJS.Timeout | null;
   lastIdTag: string | null;
   lastStartStatus: string | null;
+  temperatureC: number;
 }
 
 // Real chargers stop on their own when StartTransaction answers anything but
@@ -19,8 +20,8 @@ export class ChargerSimulator {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private lastRemoteStartIdTag: string | null = null;
   private connectors: Record<number, ConnectorState> = {
-    1: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null },
-    2: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null },
+    1: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null, temperatureC: 30 },
+    2: { status: 'Available', transactionId: null, currentMeter: 0, currentSoC: 20, meterValuesInterval: null, lastIdTag: null, lastStartStatus: null, temperatureC: 30 },
   };
 
   constructor(private client: OCPPClient) {
@@ -289,6 +290,33 @@ export class ChargerSimulator {
     this.heartbeatInterval = setInterval(sendHeartbeat, intervalSeconds * 1000);
   }
 
+  /**
+   * E07: o veículo para de puxar energia com o cabo conectado (SuspendedEV).
+   * As MeterValues continuam, com potência 0 — é o que marca a ociosidade no CMS.
+   */
+  public async suspend(connectorId: number = 1): Promise<boolean> {
+    const connector = this.connectors[connectorId];
+    if (!connector || connector.transactionId === null || connector.status !== 'Charging') {
+      console.log(`Cannot suspend connector ${connectorId}. Status is ${connector?.status}`);
+      return false;
+    }
+    connector.status = 'SuspendedEV';
+    await this.sendStatusNotification(connectorId, 'SuspendedEV');
+    return true;
+  }
+
+  /** E07: o veículo volta a carregar (SuspendedEV → Charging). */
+  public async resume(connectorId: number = 1): Promise<boolean> {
+    const connector = this.connectors[connectorId];
+    if (!connector || connector.transactionId === null || connector.status !== 'SuspendedEV') {
+      console.log(`Cannot resume connector ${connectorId}. Status is ${connector?.status}`);
+      return false;
+    }
+    connector.status = 'Charging';
+    await this.sendStatusNotification(connectorId, 'Charging');
+    return true;
+  }
+
   private startMeterValues(connectorId: number, limitKwh?: number): void {
     const connector = this.connectors[connectorId];
     if (!connector) return;
@@ -311,7 +339,11 @@ export class ChargerSimulator {
       if (this.connectors[2].status === 'Charging' || this.connectors[2].status === 'Finishing') activeCount++;
       if (activeCount === 0) activeCount = 1;
 
-      const powerW = 60000 / activeCount;
+      // SuspendedEV: conectado, sem consumo (E07).
+      const suspended = connector.status === 'SuspendedEV';
+      const powerW = suspended ? 0 : 60000 / activeCount;
+      // Temperatura do conector: sobe com a carga, esfria parado.
+      connector.temperatureC = Math.max(25, Math.min(55, connector.temperatureC + (suspended ? -0.5 : 0.4)));
       const currentA = (powerW / 220).toFixed(2);
 
       // Energy added in this interval (Wh), accelerated
@@ -361,7 +393,14 @@ export class ChargerSimulator {
                   context: 'Sample.Periodic',
                   measurand: 'Power.Active.Import',
                   unit: 'W',
-                }
+                },
+                {
+                  value: connector.temperatureC.toFixed(1),
+                  context: 'Sample.Periodic',
+                  measurand: 'Temperature',
+                  location: 'Body',
+                  unit: 'Celsius',
+                },
               ],
             },
           ],

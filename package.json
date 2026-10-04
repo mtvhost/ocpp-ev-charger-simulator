@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "scenarios:e02": "npm run build && node dist/scenarios/e02.js",
+    "scenarios:e07": "npm run build && node dist/scenarios/e07.js"
     "scenarios:e06": "npm run build && node dist/scenarios/e06.js"
   },
   "dependencies": {

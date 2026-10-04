@@ -56,6 +56,14 @@ Comandos aceitos pelo servidor HTTP local (padrão: `http://localhost:8080`):
 - **`GET /stop`**
   - Interrompe a recarga em andamento. Status muda para `Finishing`.
 
+- **`GET /suspend/:connectorId`** (E07)
+  - O veículo para de puxar energia com o cabo conectado: envia `StatusNotification` `SuspendedEV`, e as `MeterValues` seguem a cada 10 s com potência 0 (a energia não sobe). Responde 409 se o conector não estiver carregando.
+
+- **`GET /resume/:connectorId`** (E07)
+  - O veículo volta a carregar: `SuspendedEV` → `Charging`. Responde 409 se o conector não estiver suspenso.
+
+As `MeterValues` periódicas trazem também `Temperature` (°C, `location: Body`), que sobe durante a carga e cai com o conector parado.
+
 - **`GET /authorize`**
   - Envia `Authorize` com o `idTag` da query (padrão `TAG-12345`) e devolve a resposta do CMS.
   - Exemplo: `http://localhost:8080/authorize?idTag=TAG-12345`
@@ -86,6 +94,18 @@ TENANT_ID=<tenant do carregador>
 CONNECTOR=1
 ```
 
+## Telemetria e ociosidade (E07)
+
+`npm run scenarios:e07` roda contra o backend e o gateway **locais**:
+
+1. remote start pela API (`skipPayment`) e conferência da visão ao vivo (`GET /chargers/:id/live`);
+2. série de medições gravada (`GET /transactions/:id/meter-values`, gráfico e tabela, com `Temperature` e o valor bruto);
+3. `/suspend` → `idleStartedAt` marcado;
+4. `/resume` → marcação limpa;
+5. `/suspend` de novo → marcação nova, que não muda com as `MeterValues` de 0 W seguintes;
+6. `/stop` → linha do tempo (`GET /transactions/:id/timeline`) com início, ociosidade, fim, `SuspendedEV` e `RemoteStartTransaction`, e a leitura `Transaction.End` do `transactionData` na tabela.
+
+Mesmas variáveis do E02. O token precisa de `CHARGERS_VIEW`, `TRANSACTIONS_VIEW`, `TRANSACTIONS_CREATE` e `TRANSACTIONS_SKIP_PAYMENT`. `METER_WAIT_MS` (padrão 25000) é a espera por duas leituras de 10 s mais o flush de 2 s da ingestão.
 ## Autenticação OCPP (E06, Security Profile 1)
 
 Com `CHARGER_PASSWORD` definida, o simulador conecta com `Authorization: Basic base64(CHARGER_ID:senha)`, o mesmo formato de um carregador real configurado com `AuthorizationKey`. Sem ela, conecta como carregador legado. O subprotocolo `ocpp1.6` é sempre oferecido, exceto em `/ws/connect?protocol=none`.
