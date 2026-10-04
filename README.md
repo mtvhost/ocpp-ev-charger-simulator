@@ -165,3 +165,39 @@ GATEWAY_A=ws://localhost:8081
 GATEWAY_B=ws://localhost:8082
 # RATE_LIMIT_ATTEMPTS=5   # use o mesmo valor de OCPP_AUTH_MAX_FAILS_PER_IP dos gateways, com OCPP_AUTH_BLOCK_S curto
 ```
+
+## Operações guiadas (E08)
+
+O simulador responde às operações que o painel envia por `POST /chargers/:id/operations/:action` (código em `src/operations.ts`):
+
+| Action | Resposta do simulador |
+|---|---|
+| `ChangeAvailability` | `Accepted` (o conector vai para `Unavailable`/`Available`); `Scheduled` se `Inoperative` num conector carregando; `Rejected` para conector inexistente |
+| `TriggerMessage` | `Accepted` e envia a mensagem pedida (Boot, Heartbeat, Status, MeterValues, FirmwareStatus, DiagnosticsStatus); `Rejected` para conector inexistente |
+| `GetConfiguration` | chaves com `readonly`; `AuthorizationKey` volta com valor (o CMS precisa mascarar); `unknownKey` para as que não existem |
+| `ChangeConfiguration` | `Accepted`; `RebootRequired` em `MeterValueSampleInterval` e `WebSocketPingInterval`; `Rejected` em chave somente leitura; `NotSupported` em chave desconhecida |
+| `GetDiagnostics` | `{ fileName }` e envia o arquivo por **POST multipart** para `<location><arquivo>`, com `DiagnosticsStatusNotification` `Uploading` → `Uploaded`/`UploadFailed`; `location` que não é HTTP(S) → `{}` (sem arquivo) |
+| `UnlockConnector` | `Unlocked` (encerra a sessão do conector com `UnlockCommand`); `NotSupported` para conector inexistente |
+| `Reset` | `Accepted`, encerra as sessões (`SoftReset`/`HardReset`) e reconecta com novo `BootNotification` |
+| `DataTransfer` | `AntigravityEV` + `messageId=Echo` → `Accepted` com o `data` de volta; outro vendor → `UnknownVendorId` |
+| `GetLocalListVersion` / `SendLocalList` | versão guardada em memória; diferencial com versão antiga → `VersionMismatch` |
+| `ClearCache` / `ClearChargingProfile` | `Accepted` / `Unknown` |
+
+### Endpoints de teste
+
+- **`GET /behavior?action=<Action>&respond=Rejected|NotSupported|NotImplemented|timeout|default`**: força a resposta de uma action. `NotImplemented` vira CALLERROR; `timeout` nunca responde; `default` volta ao normal. O estado atual aparece em `/status` (`operations.behaviors`).
+- **`GET /data-transfer?vendorId=&messageId=&data=`**: envia um `DataTransfer` iniciado pelo carregador (o CMS responde `UnknownVendorId`).
+
+### Cenário automatizado
+
+`npm run scenarios:e08` roda contra o backend e o gateway **locais** e confere: configuração com segredo mascarado, Accepted/RebootRequired/Rejected, 400 de payload fora do OCPP 1.6 e de `AuthorizationKey`, TriggerMessage, lista local, DataTransfer, `NotImplemented` → `NOT_SUPPORTED`, `timeout` → `TIMEOUT` (202 + polling), 409 de sessão ativa e `SCHEDULED`, upload do diagnóstico pelo link, DataTransfer de entrada, Reset Hard com reconexão, `OFFLINE` com o carregador desconectado e a trilha de auditoria.
+
+```env
+SIM_URL=http://localhost:8080
+API_URL=http://localhost:3030/v1
+API_TOKEN=<JWT com CHARGERS_VIEW, CHARGERS_OPERATE e CHARGERS_OPERATE_CRITICAL>
+CHARGER_DB_ID=<_id do carregador>
+CONNECTOR=1
+```
+
+O backend precisa de `PUBLIC_API_URL` acessível pelo simulador (o `location` do GetDiagnostics é montado com ela). Para o caso de timeout não demorar 30 s no POST, use `OCPP_OPERATION_SYNC_WAIT_MS=5000` no backend local.

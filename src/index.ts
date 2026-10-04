@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { OCPPClient } from './ocpp-client';
 import { ChargerSimulator } from './simulator';
+import { FORCED_BEHAVIORS, ForcedBehavior, OperationsHandler } from './operations';
 
 const CENTRAL_SYSTEM_URL = process.env.CENTRAL_SYSTEM_URL || 'ws://ev.mim.tec.br/ocpp';
 const CHARGER_ID = process.env.CHARGER_ID || 'MIM-001';
@@ -50,10 +51,22 @@ async function main(): Promise<void> {
 
   client.addCloseListener(() => scheduleReconnect());
 
+  /** Reboot pedido pelo CMS (Reset): fecha, reconecta e manda BootNotification. */
+  async function rebootFromCms(): Promise<void> {
+    cancelReconnect();
+    autoReconnect = false;
+    await client.disconnect();
+    autoReconnect = true;
+    await connectWithRetry();
+  }
+
+  // E08: respostas às operações guiadas da plataforma.
+  const operations = new OperationsHandler(client, simulator, rebootFromCms);
+
   const app = express();
 
   app.get('/status', (req, res) => {
-    res.json({ ...simulator.getStatus(), connection: client.connection, autoReconnect });
+    res.json({ ...simulator.getStatus(), connection: client.connection, autoReconnect, operations: operations.getState() });
   });
 
   /**
@@ -157,6 +170,35 @@ async function main(): Promise<void> {
     const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
     await simulator.stopCharging(connectorId);
     res.json({ message: `StopTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
+  });
+
+  /**
+   * E08: força a resposta de uma action (Rejected | NotSupported | NotImplemented | timeout);
+   * `respond=default` volta ao comportamento normal.
+   */
+  app.get('/behavior', (req, res) => {
+    const action = String(req.query.action || '');
+    const respond = String(req.query.respond || 'default');
+    if (!action || (respond !== 'default' && !FORCED_BEHAVIORS.includes(respond as ForcedBehavior))) {
+      res.status(400).json({ message: `Use ?action=<Action>&respond=${[...FORCED_BEHAVIORS, 'default'].join('|')}` });
+      return;
+    }
+    operations.setBehavior(action, respond as ForcedBehavior | 'default');
+    res.json({ behaviors: operations.getBehaviors() });
+  });
+
+  /** E08: DataTransfer iniciado pelo carregador (o CMS responde UnknownVendorId). */
+  app.get('/data-transfer', async (req, res) => {
+    try {
+      const response = await operations.sendDataTransfer(
+        String(req.query.vendorId || 'com.example.vendor'),
+        req.query.messageId as string | undefined,
+        req.query.data as string | undefined,
+      );
+      res.json({ response });
+    } catch (err) {
+      res.status(502).json({ message: `DataTransfer failed: ${(err as Error).message}` });
+    }
   });
 
   // Servidor HTTP sobe antes da primeira conexão: o simulador é controlável

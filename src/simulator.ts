@@ -211,7 +211,7 @@ export class ChargerSimulator {
     }
   }
 
-  public async stopCharging(connectorId: number = 1): Promise<void> {
+  public async stopCharging(connectorId: number = 1, reason: string = 'Local'): Promise<void> {
     const connector = this.connectors[connectorId];
     if (!connector) return;
     if (connector.transactionId === null) {
@@ -229,7 +229,7 @@ export class ChargerSimulator {
       transactionId: connector.transactionId,
       meterStop: connector.currentMeter,
       timestamp: new Date().toISOString(),
-      reason: 'Local',
+      reason,
       // OCPP 1.6: transactionData with Transaction.End readings
       transactionData: [{
         timestamp: new Date().toISOString(),
@@ -447,6 +447,51 @@ export class ChargerSimulator {
       ignoreInvalid: IGNORE_INVALID,
       connectors: { 1: view(1), 2: view(2) },
     };
+  }
+
+  // ─── E08: estado usado pelas operações guiadas (src/operations.ts) ─────────
+
+  public connectorIds(): number[] {
+    return Object.keys(this.connectors).map(Number);
+  }
+
+  public connectorStatus(connectorId: number): string | null {
+    return this.connectors[connectorId]?.status ?? null;
+  }
+
+  public isCharging(connectorId: number): boolean {
+    return (this.connectors[connectorId]?.transactionId ?? null) !== null;
+  }
+
+  /** ChangeAvailability aplicado: Unavailable ⇄ Available (só sem sessão). */
+  public async setAvailability(connectorId: number, operative: boolean): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector || connector.transactionId !== null) return;
+    connector.status = operative ? 'Available' : 'Unavailable';
+    await this.sendStatusNotification(connectorId, connector.status);
+  }
+
+  public async sendHeartbeatNow(): Promise<void> {
+    await this.client.send('Heartbeat', {});
+  }
+
+  /** TriggerMessage MeterValues: uma leitura do registrador, na hora. */
+  public async sendMeterValuesNow(connectorId: number): Promise<void> {
+    const connector = this.connectors[connectorId];
+    if (!connector) return;
+    await this.client.send('MeterValues', {
+      connectorId,
+      ...(connector.transactionId !== null && { transactionId: connector.transactionId }),
+      meterValue: [{
+        timestamp: new Date().toISOString(),
+        sampledValue: [{
+          value: Math.round(connector.currentMeter).toString(),
+          context: 'Trigger',
+          measurand: 'Energy.Active.Import.Register',
+          unit: 'Wh',
+        }],
+      }],
+    });
   }
 
   public shutdown(): void {
