@@ -4,6 +4,17 @@ import { OCPPClient } from './ocpp-client';
 import { ChargerSimulator } from './simulator';
 import { FORCED_BEHAVIORS, ForcedBehavior, OperationsHandler } from './operations';
 
+/**
+ * idTag da requisição: `?idTag=` literal, ou `?mac=AABBCCDDEEFF` (E12), que vira
+ * `VID:AABBCCDDEEFF`, o idTag que carregadores com Autocharge enviam.
+ */
+function resolveIdTag(query: Record<string, unknown>): string {
+  const mac = query.mac as string | undefined;
+  if (mac) return `VID:${mac.replace(/[^0-9a-fA-F]/g, '').toUpperCase()}`;
+  return (query.idTag as string) || DEFAULT_ID_TAG;
+}
+
+
 const CENTRAL_SYSTEM_URL = process.env.CENTRAL_SYSTEM_URL || 'ws://ev.mim.tec.br/ocpp';
 const CHARGER_ID = process.env.CHARGER_ID || 'MIM-001';
 // E06: senha OCPP (Security Profile 1). Vazia = conecta sem Authorization (carregador legado).
@@ -133,13 +144,13 @@ async function main(): Promise<void> {
     const connectorId = parseInt(req.params.connectorId || req.query.connectorId as string || req.query.connector as string) || 1;
     const limitQuery = req.query.limit;
     const limit = limitQuery ? parseFloat(limitQuery as string) : undefined;
-    const tag = (req.query.idTag as string) || DEFAULT_ID_TAG;
+    const tag = resolveIdTag(req.query);
     await simulator.startCharging(tag, connectorId, limit);
     res.json({ message: `StartTransaction sent for connector ${connectorId}.`, state: simulator.getStatus() });
   });
 
   app.get('/authorize', async (req, res) => {
-    const tag = (req.query.idTag as string) || DEFAULT_ID_TAG;
+    const tag = resolveIdTag(req.query);
     try {
       const response = await simulator.authorize(tag);
       res.json({ message: `Authorize sent for idTag ${tag}.`, response });

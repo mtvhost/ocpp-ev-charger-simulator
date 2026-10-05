@@ -207,3 +207,16 @@ O backend precisa de `PUBLIC_API_URL` acessível pelo simulador (o `location` do
 `npm run scenarios:e09` roda contra o backend e o gateway **locais**, com o tenant do carregador em `tariffV2Enabled`. Ele grava no carregador uma tarifa com faixa de ponta e taxa de ociosidade, confere o simulador de preço (`30 kWh, 50 min, 15 min ocioso → R$ 105,00`) e faz uma recarga local (RFID, `allowLocalStart`). No meio da sessão muda a tarifa, para provar que o preço continua congelado, e deixa o conector em `SuspendedEV` por `IDLE_WAIT_MS` (padrão 75 s). Depois encerra e confere os itens do preço: energia na faixa, minutos de ociosidade e total igual à soma. No fim devolve a tarifa original do carregador.
 
 Variáveis: `API_TOKEN` (com `CHARGERS_UPDATE`, `CHARGERS_VIEW`, `TRANSACTIONS_VIEW` e `TARIFFS_MANAGE`), `CHARGER_DB_ID`, `CONNECTOR`, `METER_WAIT_MS`, `IDLE_WAIT_MS`.
+
+## E12 — tags RFID e Autocharge
+
+`/authorize` e `/start` aceitam `?idTag=` (qualquer valor) ou `?mac=AABBCCDDEEFF`, que vira o idTag do Autocharge `VID:AABBCCDDEEFF`. Dá para chamar antes ou depois de um remote start.
+
+`npm run scenarios:e12` roda contra o backend e o gateway **locais** (nunca o `.env` de produção), com o tenant do carregador em `strictIdTag` desligado e um usuário (`USER_ID`) com cartão padrão ativo tokenizado no modo teste da Pagar.me:
+
+1. tag RFID cadastrada pelo painel → `Authorize` e `StartTransaction` Accepted, sessão com usuário/cartão/`tagId`, cobrança pós-paga (`PAID`) e `usageCount` = 1;
+2. tag desativada → `Invalid` mesmo com `strictIdTag` desligado;
+3. tag reativada → `Accepted` na hora (cache invalidado) e 409 ao cadastrar o mesmo valor de novo;
+4. (com `APP_TOKEN` do mesmo usuário e `TENANT_ID`) captura de Autocharge: pedido em `/me/tags/autocharge`, remote start do app com cartão, o carregador apresenta `VID:<MAC>` e a tag `AUTOCHARGE_MAC` aparece; a recarga seguinte começa só com o MAC.
+
+Variáveis: `API_URL`, `API_TOKEN` (TAGS_MANAGE), `APP_TOKEN`, `CHARGER_DB_ID`, `TENANT_ID`, `USER_ID`, `CARD_ID`, `PAYMENT_WAIT_MS`, `SKIP_PAYMENT_CHECK=true` (sem Pagar.me no ambiente). O cenário foi escrito e compila, mas **não foi executado** (precisa de Mongo, Redis, backend e gateway locais).
