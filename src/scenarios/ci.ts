@@ -192,7 +192,9 @@ async function main() {
       await plugIn();
       const body = { tenantId: TENANT_ID, chargerId: CHARGER_DB_ID, connectorId: CONNECTOR, meterStart: 0 };
       const started = PAYMENT
-        ? await api('POST', '/transactions/remote-start/credit-card', { ...body, cardId: CARD_ID }, DRIVER_TOKEN)
+        ? // Pré-pago = limitKwh × preço (cobra e depois estorna a diferença): 50 kWh
+          // cobre com folga o que o simulador entrega e evita estourar o pré-pago.
+          await api('POST', '/transactions/remote-start/credit-card', { ...body, cardId: CARD_ID, limitKwh: 50 }, DRIVER_TOKEN)
         : await api('POST', '/transactions/remote-start', { ...body, skipPayment: true });
       remoteId = started._id ?? started.transaction?._id ?? started.data?._id ?? '';
       await waitFor('StartTransaction no simulador', async () => (await connectorState()).transactionId !== null);
