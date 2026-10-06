@@ -220,3 +220,14 @@ Variáveis: `API_TOKEN` (com `CHARGERS_UPDATE`, `CHARGERS_VIEW`, `TRANSACTIONS_V
 4. (com `APP_TOKEN` do mesmo usuário e `TENANT_ID`) captura de Autocharge: pedido em `/me/tags/autocharge`, remote start do app com cartão, o carregador apresenta `VID:<MAC>` e a tag `AUTOCHARGE_MAC` aparece; a recarga seguinte começa só com o MAC.
 
 Variáveis: `API_URL`, `API_TOKEN` (TAGS_MANAGE), `APP_TOKEN`, `CHARGER_DB_ID`, `TENANT_ID`, `USER_ID`, `CARD_ID`, `PAYMENT_WAIT_MS`, `SKIP_PAYMENT_CHECK=true` (sem Pagar.me no ambiente). O cenário foi escrito e compila, mas **não foi executado** (precisa de Mongo, Redis, backend e gateway locais).
+
+## CI — recarga ponta a ponta (E14-05)
+
+`npm run scenarios:ci` é o cenário que o GitHub Actions roda (`scripts/e2e/run-ocpp-e2e.sh` do backend sobe backend, gateway, payments e este simulador contra Mongo e Redis **locais** do runner). Lê as variáveis do `e2e.env` que o seed do backend gera (`E2E_ENV_FILE` muda o caminho):
+
+1. simulador conectado ao gateway e `BootNotification` aceito (carregador online na API);
+2. remote start pela API → `StartTransaction` → `MeterValues` (`METER_READINGS`, padrão 3) → stop → transação `COMPLETED`;
+3. com `PAGARME_TEST_SECRET_KEY` + `PAGARME_TEST_PUBLIC_KEY` (sandbox real) o remote start é pago no cartão de teste do motorista: `totalCost` = kWh × preço (±0,01) e `paymentStatus` = `PAID`; sem os secrets imprime `payment step skipped` e a sessão é de cortesia (`skipPayment`, `FREE_PAID`, custo 0);
+4. partida local com `idTag` livre (o carregador do seed tem `allowLocalStart`): a sessão é cobrada pela tarifa e confere `totalCost` = kWh × preço, nos dois modos.
+
+Sai com código ≠ 0 em qualquer falha ou timeout (`STEP_TIMEOUT_MS`, padrão 60 s). Variáveis: `SIM_URL` (8081), `API_URL` (`http://127.0.0.1:3030/v1`), `CONNECTOR`, `API_TOKEN`, `CHARGER_DB_ID`, `CHARGER_ID`, `TENANT_ID`, `UNIT_VALUE`, `DRIVER_TOKEN`, `CARD_ID`. Compila, mas **não foi executado ponta a ponta** (sem Docker/Redis na máquina de desenvolvimento): a primeira execução real é a do CI.
